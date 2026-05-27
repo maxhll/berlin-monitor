@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Berlin Situation Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Bebas+Neue&display=swap" rel="stylesheet">
+
+<!--
+  ============================================================
+  BERLIN SITUATION MONITOR v2
+  ============================================================
+  Inspiriert von scootykinz.github.io/sf-situation-monitor
+
+  KONFIGURATION (optional, alles funktioniert ohne):
+  Falls du Spritpreise möchtest, hol dir einen kostenlosen
+  Tankerkönig-Key (E-Mail an info@tankerkoenig.de) und trage
+  ihn unten in CONFIG ein. Ohne Key zeigt das Panel statt-
+  dessen einen Link zum Spritpreis-Vergleich.
+  ============================================================
+-->
+
+<script>
+  const CONFIG = {
+    // Optional: Tankerkönig-API-Key (kostenlos per Mail)
+    TANKERKOENIG_KEY: "",
+    // Standort für Spritpreise (Berlin-Mitte default)
+    LAT: 52.52,
+    LON: 13.41,
+    // Standard-Haltestelle für BVG-Panel
+    BVG_STATION_ID: "900100003",      // Alexanderplatz
+    BVG_STATION_NAME: "Alexanderplatz"
+  };
+</script>
+
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #111;
+    --panel-2: #161616;
+    --line: #2a2a2a;
+    --line-strong: #3a3a3a;
+    --ink: #e8e8e8;
+    --ink-dim: #8a8a8a;
+    --ink-mute: #555;
+    --accent: #ff2c2c;       /* Berliner Bär */
+    --accent-2: #ffd400;     /* BVG-Gelb */
+    --ok: #6ee787;
+    --warn: #ffb347;
+    --bad: #ff5a5a;
+    --grid-gap: 14px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+    background-size: 32px 32px;
+    pointer-events: none;
+    z-index: 0;
+  }
+  body::after {
+    content: "";
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at top, transparent 0%, rgba(0,0,0,0.6) 100%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; padding: 18px 22px 60px; max-width: 1600px; margin: 0 auto; }
+
+  /* ---------- HEADER ---------- */
+  header {
+    border: 1px solid var(--line-strong);
+    background: linear-gradient(180deg, #141414 0%, #0d0d0d 100%);
+    padding: 14px 18px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 18px;
+    align-items: center;
+    margin-bottom: var(--grid-gap);
+    position: relative;
+    overflow: hidden;
+  }
+  header::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--accent); }
+  .logo { font-family: 'Bebas Neue', sans-serif; font-size: 38px; line-height: 1; letter-spacing: 2px; }
+  .logo .bear { color: var(--accent); }
+  .tagline { font-size: 10px; letter-spacing: 3px; color: var(--ink-dim); text-transform: uppercase; margin-top: 4px; }
+  .status { text-align: right; font-size: 11px; color: var(--ink-dim); letter-spacing: 1.5px; }
+  .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; box-shadow: 0 0 8px var(--ok); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .clock { font-family: 'Bebas Neue', sans-serif; font-size: 28px; color: var(--accent-2); letter-spacing: 2px; line-height: 1; }
+  .meta-row { font-size: 10px; color: var(--ink-mute); letter-spacing: 1.5px; margin-top: 4px; }
+
+  /* ---------- GRID ---------- */
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: var(--grid-gap); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    position: relative;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    min-height: 220px;
+  }
+  .panel:hover { border-color: var(--line-strong); }
+
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  .panel-head .title { color: var(--ink); font-weight: 700; }
+  .panel-head .title .num { color: var(--accent); font-weight: 800; margin-right: 8px; }
+  .panel-head .ind { font-size: 9px; padding: 2px 6px; border: 1px solid var(--line-strong); color: var(--ink-dim); }
+  .panel-head .ind.live { color: var(--ok); border-color: var(--ok); }
+  .panel-head .ind.err  { color: var(--bad); border-color: var(--bad); }
+  .panel-head .ind.warn { color: var(--warn); border-color: var(--warn); }
+
+  .panel-body { padding: 14px; overflow: auto; flex: 1; font-size: 12px; line-height: 1.55; }
+  .panel-body::-webkit-scrollbar { width: 6px; }
+  .panel-body::-webkit-scrollbar-track { background: var(--panel); }
+  .panel-body::-webkit-scrollbar-thumb { background: var(--line-strong); }
+
+  .col-3 { grid-column: span 3; }
+  .col-4 { grid-column: span 4; }
+  .col-5 { grid-column: span 5; }
+  .col-6 { grid-column: span 6; }
+  .col-7 { grid-column: span 7; }
+  .col-8 { grid-column: span 8; }
+  .col-12 { grid-column: span 12; }
+  .row-tall { min-height: 360px; }
+  .row-mid { min-height: 300px; }
+
+  @media (max-width: 1100px) {
+    .col-3, .col-4, .col-5 { grid-column: span 6; }
+    .col-6, .col-7, .col-8 { grid-column: span 12; }
+  }
+  @media (max-width: 640px) {
+    .col-3, .col-4, .col-5, .col-6, .col-7, .col-8 { grid-column: span 12; }
+    .wrap { padding: 12px; }
+    .logo { font-size: 28px; }
+  }
+
+  .news-item { padding: 10px 0; border-bottom: 1px dashed var(--line); display: grid; grid-template-columns: 70px 1fr; gap: 10px; }
+  .news-item:last-child { border-bottom: none; }
+  .news-item .src { color: var(--accent); font-size: 9px; letter-spacing: 1px; text-transform: uppercase; padding-top: 2px; }
+  .news-item a { color: var(--ink); text-decoration: none; display: block; }
+  .news-item a:hover { color: var(--accent-2); }
+  .news-item .time { color: var(--ink-mute); font-size: 9px; letter-spacing: 1px; margin-top: 4px; }
+
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .stat { border: 1px solid var(--line); padding: 10px 12px; }
+  .stat .lbl { font-size: 9px; color: var(--ink-dim); letter-spacing: 1.5px; text-transform: uppercase; }
+  .stat .val { font-family: 'Bebas Neue', sans-serif; font-size: 32px; color: var(--ink); line-height: 1.1; margin-top: 4px; }
+  .stat .val.acc { color: var(--accent); }
+  .stat .val.acc2 { color: var(--accent-2); }
+  .stat .sub { font-size: 10px; color: var(--ink-mute); letter-spacing: 1px; }
+
+  .big-num { font-family: 'Bebas Neue', sans-serif; font-size: 72px; line-height: 1; color: var(--accent); letter-spacing: 2px; }
+
+  .weather-now { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center; padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+  .weather-icon { font-size: 48px; }
+  .weather-temp { font-family: 'Bebas Neue', sans-serif; font-size: 56px; line-height: 1; }
+  .weather-desc { font-size: 11px; color: var(--ink-dim); letter-spacing: 1.5px; text-transform: uppercase; }
+  .weather-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px; }
+  .weather-grid div { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dotted var(--line); }
+  .weather-grid span:first-child { color: var(--ink-dim); }
+
+  .aqi-bar { height: 6px; background: linear-gradient(90deg, #6ee787 0%, #ffd400 33%, #ffb347 66%, #ff5a5a 100%); position: relative; margin: 8px 0; }
+  .aqi-bar::after { content: ""; position: absolute; top: -3px; width: 2px; height: 12px; background: var(--ink); left: var(--aqi, 25%); }
+
+  .transit-line { display: grid; grid-template-columns: 50px 1fr auto; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--line); align-items: center; font-size: 11px; }
+  .line-badge { padding: 3px 6px; text-align: center; color: #fff; font-weight: 700; font-size: 10px; letter-spacing: 1px; }
+
+  .ticker-track { display: flex; gap: 36px; animation: ticker 60s linear infinite; white-space: nowrap; }
+  @keyframes ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  .ticker { overflow: hidden; border: 1px solid var(--line); border-left: 4px solid var(--accent-2); background: var(--panel); padding: 10px 0; margin-bottom: var(--grid-gap); }
+  .ticker .item { font-size: 11px; letter-spacing: 1.5px; color: var(--ink-dim); }
+  .ticker .item strong { color: var(--accent-2); margin-right: 6px; }
+
+  .corner { position: absolute; width: 8px; height: 8px; border: 1px solid var(--accent); }
+  .corner.tl { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+  .corner.tr { top: -1px; right: -1px; border-left: 0; border-bottom: 0; }
+  .corner.bl { bottom: -1px; left: -1px; border-right: 0; border-top: 0; }
+  .corner.br { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+
+  .empty { color: var(--ink-mute); font-size: 11px; text-align: center; padding: 30px 10px; letter-spacing: 1px; }
+  .err-msg { color: var(--bad); font-size: 11px; }
+  .loading { color: var(--ink-mute); font-size: 11px; letter-spacing: 1px; }
+  .loading::after { content: ""; display: inline-block; animation: dots 1.4s steps(4) infinite; }
+  @keyframes dots { 0%{content:"";}25%{content:".";}50%{content:"..";}75%{content:"...";}100%{content:"";} }
+
+  .event-link { display: block; text-decoration: none; background: var(--panel-2); border: 1px solid var(--line); padding: 8px 10px; transition: all 0.15s; }
+  .event-link:hover { border-color: var(--accent); transform: translateX(2px); }
+
+  /* WARN-LEVEL FÜR DWD */
+  .warn-card { border-left: 4px solid var(--warn); background: var(--panel-2); padding: 10px 12px; margin-bottom: 8px; }
+  .warn-card.lvl-1 { border-color: #ffd400; }
+  .warn-card.lvl-2 { border-color: #ffb347; }
+  .warn-card.lvl-3 { border-color: #ff5a5a; }
+  .warn-card.lvl-4 { border-color: #c200c2; }
+  .warn-card .ev { font-size: 12px; color: var(--ink); font-weight: 700; }
+  .warn-card .desc { font-size: 10px; color: var(--ink-dim); margin-top: 4px; line-height: 1.4; }
+  .warn-card .meta { font-size: 9px; color: var(--ink-mute); letter-spacing: 1px; margin-top: 6px; }
+
+  /* POLLEN BAR */
+  .pollen-row { display: grid; grid-template-columns: 90px 1fr 40px; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 11px; }
+  .pollen-row:last-child { border-bottom: none; }
+  .pollen-bar { height: 6px; background: var(--panel-2); position: relative; }
+  .pollen-bar .fill { height: 100%; transition: width 0.5s; }
+  .pollen-val { text-align: right; font-family: 'Bebas Neue'; font-size: 14px; color: var(--ink); }
+
+  /* SUN */
+  .sun-vis { position: relative; height: 80px; margin: 12px 0; border-bottom: 1px solid var(--line); }
+  .sun-vis .arc { position: absolute; left: 8%; right: 8%; bottom: 0; height: 60px; border: 1px dashed var(--ink-mute); border-bottom: none; border-radius: 60px 60px 0 0; }
+  .sun-vis .sun { position: absolute; width: 14px; height: 14px; border-radius: 50%; background: var(--accent-2); box-shadow: 0 0 16px var(--accent-2); top: 0; transform: translate(-50%, -50%); }
+  .sun-times { display: flex; justify-content: space-between; font-size: 11px; margin-top: 8px; }
+  .sun-times .blk { text-align: center; }
+  .sun-times .lbl { font-size: 9px; color: var(--ink-dim); letter-spacing: 1.5px; }
+  .sun-times .v { font-family: 'Bebas Neue'; font-size: 20px; color: var(--ink); }
+
+  footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 10px; color: var(--ink-mute); letter-spacing: 1.5px; text-align: center; line-height: 1.8; }
+  footer .div { color: var(--accent); margin: 0 8px; }
+  footer a { color: var(--ink-dim); text-decoration: none; }
+  footer a:hover { color: var(--accent-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ HEADER ============ -->
+  <header>
+    <div>
+      <div class="logo"><span class="bear">▌</span> BERLIN <span class="bear">SITUATION</span> MONITOR</div>
+      <div class="tagline">Hauptstadt Intelligence Feed · v2.0</div>
+    </div>
+    <div></div>
+    <div class="status">
+      <div><span class="dot"></span>SYSTEM ONLINE</div>
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="meta-row" id="date-row">—</div>
+    </div>
+  </header>
+
+  <!-- ============ TICKER ============ -->
+  <div class="ticker">
+    <div class="ticker-track" id="ticker-track">
+      <div class="item"><strong>BERLIN</strong> 52.52°N 13.40°E</div>
+      <div class="item"><strong>BEZIRKE</strong> 12 aktiv</div>
+      <div class="item"><strong>EINWOHNER</strong> ~3.85 Mio</div>
+      <div class="item"><strong>BVG</strong> live</div>
+      <div class="item"><strong>DWD</strong> warnings</div>
+      <div class="item"><strong>UBA</strong> air</div>
+      <div class="item"><strong>BERLIN</strong> 52.52°N 13.40°E</div>
+      <div class="item"><strong>BEZIRKE</strong> 12 aktiv</div>
+      <div class="item"><strong>EINWOHNER</strong> ~3.85 Mio</div>
+      <div class="item"><strong>BVG</strong> live</div>
+      <div class="item"><strong>DWD</strong> warnings</div>
+      <div class="item"><strong>UBA</strong> air</div>
+    </div>
+  </div>
+
+  <!-- ============ GRID ============ -->
+  <div class="grid">
+
+    <!-- 01 WEATHER -->
+    <section class="panel col-4">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">01</span>WETTER · BERLIN-MITTE</div>
+        <div class="ind" id="ind-weather">…</div>
+      </div>
+      <div class="panel-body" id="weather-body"><div class="loading">Verbinde mit Open-Meteo</div></div>
+    </section>
+
+    <!-- 02 DWD-WARNUNGEN (NEU) -->
+    <section class="panel col-4">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">02</span>DWD UNWETTER-WARNUNGEN</div>
+        <div class="ind" id="ind-dwd">…</div>
+      </div>
+      <div class="panel-body" id="dwd-body"><div class="loading">Lade Warnungen</div></div>
+    </section>
+
+    <!-- 03 LUFT -->
+    <section class="panel col-4">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">03</span>LUFTQUALITÄT</div>
+        <div class="ind" id="ind-air">…</div>
+      </div>
+      <div class="panel-body" id="air-body"><div class="loading">Lade Daten</div></div>
+    </section>
+
+    <!-- 04 NEWS -->
+    <section class="panel col-8 row-tall">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">04</span>BERLIN NEWS · LIVE FEED</div>
+        <div class="ind" id="ind-news">…</div>
+      </div>
+      <div class="panel-body" id="news-body"><div class="loading">Lade RSS-Feeds</div></div>
+    </section>
+
+    <!-- 05 BVG -->
+    <section class="panel col-4 row-tall">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">05</span>BVG · ABFAHRTEN</div>
+        <div class="ind" id="ind-transit">…</div>
+      </div>
+      <div class="panel-body" id="transit-body"><div class="loading">Lade Verkehrsmeldungen</div></div>
+    </section>
+
+    <!-- 06 SONNE (NEU) -->
+    <section class="panel col-4 row-mid">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">06</span>SONNE · TAGESLICHT</div>
+        <div class="ind" id="ind-sun">…</div>
+      </div>
+      <div class="panel-body" id="sun-body"><div class="loading">Berechne</div></div>
+    </section>
+
+    <!-- 07 POLLEN (NEU) -->
+    <section class="panel col-4 row-mid">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">07</span>POLLENFLUG</div>
+        <div class="ind" id="ind-pollen">…</div>
+      </div>
+      <div class="panel-body" id="pollen-body"><div class="loading">Lade DWD-Pollendaten</div></div>
+    </section>
+
+    <!-- 08 SPRITPREISE (NEU) -->
+    <section class="panel col-4 row-mid">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">08</span>SPRITPREISE</div>
+        <div class="ind" id="ind-fuel">…</div>
+      </div>
+      <div class="panel-body" id="fuel-body"><div class="loading">Lade Tankerkönig</div></div>
+    </section>
+
+    <!-- 09 POLIZEI -->
+    <section class="panel col-4 row-mid">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">09</span>POLIZEI · MELDUNGEN</div>
+        <div class="ind" id="ind-police">…</div>
+      </div>
+      <div class="panel-body" id="police-body"><div class="loading">Lade Meldungen</div></div>
+    </section>
+
+    <!-- 10 EVENTS -->
+    <section class="panel col-4 row-mid">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">10</span>EVENTS</div>
+        <div class="ind">CURATED</div>
+      </div>
+      <div class="panel-body">
+        <div style="display:grid;gap:8px;">
+          <a href="https://www.berlin.de/events/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">OFFIZIELL</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">berlin.de/events</div>
+          </a>
+          <a href="https://www.tip-berlin.de/events/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">STADTMAGAZIN</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">tip Berlin</div>
+          </a>
+          <a href="https://ra.co/events/de/berlin" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">CLUBS · TECHNO</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Resident Advisor</div>
+          </a>
+          <a href="https://www.berlin-buehnen.de/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">THEATER · OPER</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Berlin Bühnen</div>
+          </a>
+          <a href="https://www.museumsportal-berlin.de/de/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">MUSEEN</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Museumsportal</div>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11 BÜRGERSERVICE -->
+    <section class="panel col-6">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">11</span>BÜRGERSERVICE · MAERKER</div>
+        <div class="ind">115</div>
+      </div>
+      <div class="panel-body">
+        <div style="font-size:11px;color:var(--ink-dim);line-height:1.7;margin-bottom:12px;">
+          Schäden, Müll, Beleuchtung & sonstige Stadtprobleme melden — das Berliner Pendant zu SF 311.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <a href="https://www.berlin.de/sen/web/maerker/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent-2);letter-spacing:2px;">MELDEN</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Maerker Berlin</div>
+          </a>
+          <a href="https://service.berlin.de/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent-2);letter-spacing:2px;">TERMIN</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Bürgeramt-Termin</div>
+          </a>
+          <a href="tel:115" class="event-link">
+            <div style="font-size:9px;color:var(--accent-2);letter-spacing:2px;">HOTLINE</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">115 — Behördennummer</div>
+          </a>
+          <a href="https://www.berlin.de/polizei/dienststellen/zentrale-services/notrufe/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--bad);letter-spacing:2px;">NOTRUF</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">110 / 112</div>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 VERKEHR -->
+    <section class="panel col-6">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="panel-head">
+        <div class="title"><span class="num">12</span>VERKEHR · BAUSTELLEN</div>
+        <div class="ind">EXT</div>
+      </div>
+      <div class="panel-body">
+        <div style="font-size:11px;color:var(--ink-dim);line-height:1.7;margin-bottom:12px;">
+          Aktuelle Verkehrslage, Baustellen, Sperrungen und Wartezeiten an Knotenpunkten.
+        </div>
+        <div style="display:grid;gap:6px;">
+          <a href="https://viz.berlin.de/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">VIZ BERLIN</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Verkehrsinformationszentrale</div>
+          </a>
+          <a href="https://www.vbb.de/fahrinfo/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">VBB</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Fahrtinfo</div>
+          </a>
+          <a href="https://www.bvg.de/de/verbindungen/stoerungsmeldungen" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">BVG</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Aktuelle Störungen</div>
+          </a>
+          <a href="https://www.s-bahn.berlin/fahren/bauen-stoerung/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">S-BAHN</div>
+            <div style="color:var(--ink);font-size:12px;margin-top:3px;">Bauen & Störungen</div>
+          </a>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    BERLIN SITUATION MONITOR <span class="div">▌</span>
+    Daten: Open-Meteo · Bright Sky (DWD) · BVG/VBB · Tankerkönig · rbb24 · Tagesspiegel · Berlin.de
+    <span class="div">▌</span>
+    Inspiriert von <a href="https://scootykinz.github.io/sf-situation-monitor/" target="_blank">SF Situation Monitor</a>
+    <span class="div">▌</span>
+    Kein offizielles Angebot
+  </footer>
+</div>
+
+<script>
+  // ============ CLOCK ============
+  function tickClock() {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2,'0');
+    const mm = String(now.getMinutes()).padStart(2,'0');
+    const ss = String(now.getSeconds()).padStart(2,'0');
+    document.getElementById('clock').textContent = `${hh}:${mm}:${ss}`;
+    const opts = { weekday:'short', day:'2-digit', month:'short', year:'numeric' };
+    document.getElementById('date-row').textContent =
+      now.toLocaleDateString('de-DE', opts).toUpperCase() + ' · UTC+1';
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+
+  const setInd = (id, state, label) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'ind ' + state;
+    el.textContent = label;
+  };
+
+  // ============ 01 WEATHER · Open-Meteo (mit Sonnenzeiten) ============
+  let SUN_DATA = null;
+  async function loadWeather() {
+    try {
+      const url = 'https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41' +
+                  '&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day' +
+                  '&daily=temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset' +
+                  '&timezone=Europe%2FBerlin&forecast_days=3';
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('http');
+      const d = await res.json();
+      const c = d.current;
+      const codes = {
+        0:['☀','Klar'],1:['🌤','Heiter'],2:['⛅','Bewölkt'],3:['☁','Bedeckt'],
+        45:['🌫','Nebel'],48:['🌫','Reifnebel'],
+        51:['🌦','Leichter Nieselregen'],53:['🌦','Nieselregen'],55:['🌦','Starker Nieselregen'],
+        61:['🌧','Leichter Regen'],63:['🌧','Regen'],65:['🌧','Starker Regen'],
+        71:['🌨','Leichter Schnee'],73:['🌨','Schnee'],75:['❄','Starker Schnee'],
+        80:['🌦','Schauer'],81:['🌦','Schauer'],82:['⛈','Heftige Schauer'],
+        95:['⛈','Gewitter'],96:['⛈','Gewitter+Hagel'],99:['⛈','Schweres Gewitter']
+      };
+      const wc = codes[c.weather_code] || ['•','—'];
+      const days = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+      const dayHtml = d.daily.time.slice(0,3).map((t,i)=> {
+        const dn = new Date(t).getDay();
+        const dc = codes[d.daily.weather_code[i]] || ['•','—'];
+        return `<div style="border:1px solid var(--line);padding:6px;text-align:center;">
+          <div style="font-size:9px;color:var(--ink-dim);letter-spacing:1.5px;">${i===0?'HEUTE':days[dn].toUpperCase()}</div>
+          <div style="font-size:20px;margin:4px 0;">${dc[0]}</div>
+          <div style="font-size:11px;"><span style="color:var(--accent)">${Math.round(d.daily.temperature_2m_max[i])}°</span> <span style="color:var(--ink-mute)">${Math.round(d.daily.temperature_2m_min[i])}°</span></div>
+        </div>`;
+      }).join('');
+      document.getElementById('weather-body').innerHTML = `
+        <div class="weather-now">
+          <div class="weather-icon">${wc[0]}</div>
+          <div>
+            <div class="weather-temp">${Math.round(c.temperature_2m)}°<span style="font-size:18px;color:var(--ink-dim)">C</span></div>
+            <div class="weather-desc">${wc[1]}</div>
+          </div>
+        </div>
+        <div class="weather-grid">
+          <div><span>Gefühlt</span><span>${Math.round(c.apparent_temperature)}°C</span></div>
+          <div><span>Luftfeuchte</span><span>${c.relative_humidity_2m}%</span></div>
+          <div><span>Wind</span><span>${Math.round(c.wind_speed_10m)} km/h</span></div>
+          <div><span>Status</span><span>${c.is_day ? 'TAG' : 'NACHT'}</span></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px;">${dayHtml}</div>
+      `;
+      setInd('ind-weather','live','LIVE');
+      // Pass sun data to panel 06
+      SUN_DATA = { sunrise: d.daily.sunrise[0], sunset: d.daily.sunset[0] };
+      renderSun();
+    } catch(e) {
+      document.getElementById('weather-body').innerHTML = '<div class="err-msg">Wetterdaten nicht verfügbar.</div>';
+      setInd('ind-weather','err','ERROR');
+    }
+  }
+
+  // ============ 02 DWD-WARNUNGEN · via Bright Sky ============
+  async function loadDWD() {
+    try {
+      // Bright Sky Alerts-Endpoint: Berlin = warn_cell_ids enthalten
+      // Stattdessen: einfach lat/lon, Bright Sky filtert
+      const url = 'https://api.brightsky.dev/alerts?lat=52.52&lon=13.41';
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('http');
+      const d = await res.json();
+      const alerts = d.alerts || [];
+      if (!alerts.length) {
+        document.getElementById('dwd-body').innerHTML = `
+          <div style="text-align:center;padding:30px 10px;">
+            <div style="font-family:'Bebas Neue';font-size:48px;color:var(--ok);line-height:1;">OK</div>
+            <div style="font-size:11px;color:var(--ink-dim);letter-spacing:2px;margin-top:8px;">KEINE AKTIVEN WARNUNGEN</div>
+            <div style="font-size:9px;color:var(--ink-mute);letter-spacing:1px;margin-top:14px;">Quelle: DWD via Bright Sky</div>
+          </div>`;
+        setInd('ind-dwd','live','OK');
+        return;
+      }
+      const html = alerts.slice(0,5).map(a => {
+        const lvl = a.severity_level || 1;
+        const ev = a.event_de || a.event_en || a.event || 'Warnung';
+        const desc = (a.headline_de || a.description_de || '').substring(0, 140);
+        const onset = a.onset ? new Date(a.onset).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+        const expires = a.expires ? new Date(a.expires).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+        return `<div class="warn-card lvl-${lvl}">
+          <div class="ev">${ev}</div>
+          ${desc ? `<div class="desc">${desc}…</div>`:''}
+          <div class="meta">${onset} → ${expires} · Stufe ${lvl}</div>
+        </div>`;
+      }).join('');
+      document.getElementById('dwd-body').innerHTML = html + `
+        <div style="font-size:9px;color:var(--ink-mute);letter-spacing:1px;margin-top:10px;text-align:center;">${alerts.length} aktive Warnung(en)</div>`;
+      setInd('ind-dwd','warn',`${alerts.length} AKTIV`);
+    } catch(e) {
+      document.getElementById('dwd-body').innerHTML = `
+        <div style="font-size:11px;color:var(--ink-dim);line-height:1.7;margin-bottom:10px;">
+          Warnungs-API nicht erreichbar.
+        </div>
+        <a href="https://www.dwd.de/DE/wetter/warnungen_landkreise/warnWetter_node.html?ort=Berlin" target="_blank" class="event-link">
+          <div style="font-size:9px;color:var(--warn);letter-spacing:2px;">DWD</div>
+          <div style="color:var(--ink);font-size:11px;margin-top:3px;">Warnungen Berlin → DWD</div>
+        </a>`;
+      setInd('ind-dwd','warn','LINK');
+    }
+  }
+
+  // ============ 03 AIR QUALITY ============
+  async function loadAir() {
+    try {
+      const url = 'https://air-quality-api.open-meteo.com/v1/air-quality?latitude=52.52&longitude=13.41' +
+                  '&current=european_aqi,pm10,pm2_5,nitrogen_dioxide,ozone&timezone=Europe%2FBerlin';
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('http');
+      const d = await res.json();
+      const a = d.current;
+      const aqi = a.european_aqi;
+      let lvl = 'GUT', col = 'var(--ok)';
+      if (aqi > 20) { lvl='MÄSSIG'; col='var(--accent-2)'; }
+      if (aqi > 40) { lvl='MITTEL'; col='var(--warn)'; }
+      if (aqi > 60) { lvl='SCHLECHT'; col='var(--bad)'; }
+      if (aqi > 80) { lvl='SEHR SCHLECHT'; col='var(--bad)'; }
+      const pos = Math.min(95, Math.max(2, (aqi/100)*100));
+      document.getElementById('air-body').innerHTML = `
+        <div style="text-align:center;padding-bottom:10px;">
+          <div class="big-num" style="color:${col};">${Math.round(aqi)}</div>
+          <div style="font-size:10px;letter-spacing:2px;color:var(--ink-dim);margin-top:4px;">EUROPEAN AQI · ${lvl}</div>
+        </div>
+        <div class="aqi-bar" style="--aqi:${pos}%"></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--ink-mute);letter-spacing:1px;">
+          <span>0</span><span>25</span><span>50</span><span>75</span><span>100+</span>
+        </div>
+        <div class="weather-grid" style="margin-top:14px;">
+          <div><span>PM2.5</span><span>${a.pm2_5?.toFixed(1) ?? '—'} µg/m³</span></div>
+          <div><span>PM10</span><span>${a.pm10?.toFixed(1) ?? '—'} µg/m³</span></div>
+          <div><span>NO₂</span><span>${a.nitrogen_dioxide?.toFixed(1) ?? '—'} µg/m³</span></div>
+          <div><span>O₃</span><span>${a.ozone?.toFixed(1) ?? '—'} µg/m³</span></div>
+        </div>
+      `;
+      setInd('ind-air','live','LIVE');
+    } catch(e) {
+      document.getElementById('air-body').innerHTML = '<div class="err-msg">Luftqualität nicht verfügbar.</div>';
+      setInd('ind-air','err','ERROR');
+    }
+  }
+
+  // ============ 04 NEWS ============
+  async function loadNews() {
+    const feeds = [
+      { src: 'RBB24',         url: 'https://www.rbb24.de/index.feed' },
+      { src: 'TAGESSPIEGEL',  url: 'https://www.tagesspiegel.de/contentexport/feed/home' },
+      { src: 'BERLINER ZTG',  url: 'https://www.berliner-zeitung.de/feed.id_berlin.xml' },
+      { src: 'BZ',            url: 'https://www.bz-berlin.de/feed' }
+    ];
+    const tryFeed = async (f) => {
+      try {
+        const u = 'https://api.rss2json.com/v1/api.json?rss_url=' + encodeURIComponent(f.url);
+        const r = await fetch(u);
+        if (!r.ok) return [];
+        const d = await r.json();
+        if (d.status !== 'ok') return [];
+        return d.items.slice(0,4).map(i => ({ src:f.src, title:i.title, link:i.link, pub:i.pubDate }));
+      } catch { return []; }
+    };
+    const all = (await Promise.all(feeds.map(tryFeed))).flat();
+    if (!all.length) {
+      document.getElementById('news-body').innerHTML =
+        `<div class="empty">News-Feeds derzeit nicht erreichbar.<br/>
+         <a href="https://www.rbb24.de" target="_blank" style="color:var(--accent-2);">rbb24.de</a> ·
+         <a href="https://www.tagesspiegel.de" target="_blank" style="color:var(--accent-2);">tagesspiegel.de</a></div>`;
+      setInd('ind-news','err','OFFLINE');
+      return;
+    }
+    all.sort((a,b)=> new Date(b.pub)-new Date(a.pub));
+    const fmt = (s) => {
+      const d = new Date(s); if (isNaN(d)) return '';
+      const diff = (Date.now()-d.getTime())/60000;
+      if (diff < 60) return `vor ${Math.round(diff)} min`;
+      if (diff < 1440) return `vor ${Math.round(diff/60)} h`;
+      return d.toLocaleDateString('de-DE');
+    };
+    document.getElementById('news-body').innerHTML = all.slice(0,14).map(n => `
+      <div class="news-item">
+        <div class="src">${n.src}</div>
+        <div>
+          <a href="${n.link}" target="_blank" rel="noopener">${n.title}</a>
+          <div class="time">${fmt(n.pub)}</div>
+        </div>
+      </div>
+    `).join('');
+    setInd('ind-news','live','LIVE');
+  }
+
+  // ============ 05 BVG ============
+  async function loadTransit() {
+    try {
+      const url = `https://v6.bvg.transport.rest/stops/${CONFIG.BVG_STATION_ID}/departures?duration=20&results=8`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('http');
+      const data = await res.json();
+      const deps = data.departures || data;
+      if (!Array.isArray(deps)) throw new Error('shape');
+      const colors = { 'subway':'#0066b3','suburban':'#006e34','tram':'#cc0033','bus':'#a3195b','express':'#ff6900','regional':'#ff6900','ferry':'#00a3d9' };
+      const html = deps.slice(0,10).map(dep => {
+        const line = dep.line || {};
+        const name = line.name || '—';
+        const product = line.product || 'bus';
+        const dest = (dep.destination && dep.destination.name) || dep.direction || '';
+        const when = dep.when || dep.plannedWhen;
+        const t = when ? new Date(when).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : '';
+        const delay = dep.delay ? ` +${Math.round(dep.delay/60)}` : '';
+        const c = colors[product] || '#666';
+        return `<div class="transit-line">
+          <span class="line-badge" style="background:${c};">${name}</span>
+          <span style="color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">→ ${dest}</span>
+          <span style="color:var(--ink-dim);font-size:10px;">${t}${delay ? `<span style="color:var(--bad);">${delay}</span>`:''}</span>
+        </div>`;
+      }).join('');
+      document.getElementById('transit-body').innerHTML = `
+        <div style="font-size:10px;color:var(--ink-dim);letter-spacing:1.5px;margin-bottom:8px;">
+          STATION · ${CONFIG.BVG_STATION_NAME.toUpperCase()} · NÄCHSTE ABFAHRTEN
+        </div>
+        ${html || '<div class="empty">Keine Abfahrten</div>'}
+        <div style="font-size:10px;margin-top:10px;">
+          <a href="https://www.bvg.de/de/verbindungen/stoerungsmeldungen" target="_blank" style="color:var(--ink-dim);text-decoration:none;">→ Störungsmeldungen</a>
+        </div>
+      `;
+      setInd('ind-transit','live','LIVE');
+    } catch(e) {
+      document.getElementById('transit-body').innerHTML = `
+        <div style="font-size:11px;color:var(--ink-dim);line-height:1.7;">
+          BVG-API derzeit nicht erreichbar.
+        </div>
+        <div style="display:grid;gap:6px;margin-top:14px;">
+          <a href="https://www.bvg.de/de/verbindungen/stoerungsmeldungen" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">BVG</div>
+            <div style="color:var(--ink);font-size:11px;margin-top:3px;">Störungsmeldungen</div>
+          </a>
+          <a href="https://www.s-bahn.berlin/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent);letter-spacing:2px;">S-BAHN</div>
+            <div style="color:var(--ink);font-size:11px;margin-top:3px;">S-Bahn Berlin</div>
+          </a>
+        </div>`;
+      setInd('ind-transit','warn','LINKS');
+    }
+  }
+
+  // ============ 06 SONNE ============
+  function renderSun() {
+    if (!SUN_DATA) return;
+    const sr = new Date(SUN_DATA.sunrise);
+    const ss = new Date(SUN_DATA.sunset);
+    const now = new Date();
+    const srStr = sr.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+    const ssStr = ss.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+    const durMs = ss - sr;
+    const h = Math.floor(durMs/3600000);
+    const m = Math.floor((durMs%3600000)/60000);
+    // Position der Sonne auf dem Bogen (0–1)
+    let pct = 0;
+    if (now >= sr && now <= ss) pct = (now - sr) / durMs;
+    else if (now < sr) pct = 0;
+    else pct = 1;
+    // Bogen-Position: x linear, y per sin
+    const xPct = pct * 100;
+    const arc = Math.sin(pct * Math.PI); // 0…1…0
+    const yPct = (1 - arc) * 100;
+    const sunVisible = now >= sr && now <= ss;
+    document.getElementById('sun-body').innerHTML = `
+      <div style="text-align:center;">
+        <div style="font-family:'Bebas Neue';font-size:42px;color:var(--accent-2);line-height:1;">${h}h ${String(m).padStart(2,'0')}m</div>
+        <div style="font-size:10px;color:var(--ink-dim);letter-spacing:2px;margin-top:4px;">TAGESLICHT-DAUER</div>
+      </div>
+      <div class="sun-vis">
+        <div class="arc"></div>
+        <div class="sun" style="left:${8 + xPct * 0.84}%; top:${yPct * 0.75}%; opacity:${sunVisible ? 1 : 0.3};"></div>
+      </div>
+      <div class="sun-times">
+        <div class="blk"><div class="lbl">SONNENAUFGANG</div><div class="v">${srStr}</div></div>
+        <div class="blk"><div class="lbl">SONNENUNTERGANG</div><div class="v">${ssStr}</div></div>
+      </div>
+      <div style="font-size:10px;color:var(--ink-mute);letter-spacing:1px;text-align:center;margin-top:12px;">
+        Zeitzone Europa/Berlin
+      </div>
+    `;
+    setInd('ind-sun','live','LIVE');
+  }
+
+  // ============ 07 POLLEN · DWD via CORS-Proxy ============
+  async function loadPollen() {
+    // DWD-JSON für Pollen, Berlin/Brandenburg = region 50
+    // opendata.dwd.de unterstützt CORS NICHT, daher über corsproxy.io
+    try {
+      const proxied = 'https://corsproxy.io/?' + encodeURIComponent('https://opendata.dwd.de/climate_environment/health/alerts/s31fg.json');
+      const r = await fetch(proxied);
+      if (!r.ok) throw new Error('http');
+      const d = await r.json();
+      const region = (d.content || []).find(c => c.region_id === 50 && c.partregion_id === -1);
+      if (!region) throw new Error('region');
+      const pollen = region.Pollen;
+      const palette = { '-1':'#3a3a3a', '0':'#6ee787', '0-1':'#a6e87b', '1':'#ffd400', '1-2':'#ffb347', '2':'#ff8c42', '2-3':'#ff5a5a', '3':'#c200c2' };
+      const lvlMap = {'-1':'k.A.','0':'keine','0-1':'gering','1':'gering','1-2':'mittel','2':'mittel','2-3':'hoch','3':'hoch'};
+      const order = ['Hasel','Erle','Esche','Birke','Graeser','Roggen','Beifuss','Ambrosia'];
+      const html = order.filter(p => pollen[p]).map(p => {
+        const today = pollen[p].today;
+        const col = palette[today] || '#3a3a3a';
+        const w = today === '-1' ? 2 : (parseFloat(String(today).split('-')[0]) / 3) * 100;
+        return `<div class="pollen-row">
+          <span style="color:var(--ink-dim);">${p}</span>
+          <div class="pollen-bar"><div class="fill" style="width:${Math.max(2,w)}%;background:${col};"></div></div>
+          <div class="pollen-val" style="color:${col};">${lvlMap[today]||today}</div>
+        </div>`;
+      }).join('');
+      const updated = d.last_update ? d.last_update.split(' ')[0] + ' ' + d.last_update.split(' ')[1] : '';
+      document.getElementById('pollen-body').innerHTML = html + `
+        <div style="font-size:9px;color:var(--ink-mute);letter-spacing:1px;margin-top:12px;text-align:center;">
+          DWD · Berlin/Brandenburg · ${updated}
+        </div>`;
+      setInd('ind-pollen','live','LIVE');
+    } catch(e) {
+      document.getElementById('pollen-body').innerHTML = `
+        <div style="font-size:11px;color:var(--ink-dim);line-height:1.7;margin-bottom:10px;">
+          Pollenflug-API nicht erreichbar.
+        </div>
+        <a href="https://www.dwd.de/DE/leistungen/gefahrenindizespollen/gefahrenindexpollen.html" target="_blank" class="event-link">
+          <div style="font-size:9px;color:var(--ok);letter-spacing:2px;">DWD</div>
+          <div style="color:var(--ink);font-size:11px;margin-top:3px;">Pollenflug-Gefahrenindex</div>
+        </a>`;
+      setInd('ind-pollen','warn','LINK');
+    }
+  }
+
+  // ============ 08 SPRITPREISE · Tankerkönig ============
+  async function loadFuel() {
+    if (!CONFIG.TANKERKOENIG_KEY) {
+      document.getElementById('fuel-body').innerHTML = `
+        <div style="font-size:11px;color:var(--ink-dim);line-height:1.7;margin-bottom:12px;">
+          Für Live-Spritpreise: kostenlosen API-Key bei Tankerkönig anfordern und oben in CONFIG eintragen.
+        </div>
+        <div style="display:grid;gap:6px;">
+          <a href="https://creativecommons.tankerkoenig.de/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent-2);letter-spacing:2px;">KEY ANFORDERN</div>
+            <div style="color:var(--ink);font-size:11px;margin-top:3px;">creativecommons.tankerkoenig.de</div>
+          </a>
+          <a href="https://www.adac.de/services-tests/tanken-kraftstoff-antrieb/aktuelle-kraftstoffpreise/" target="_blank" class="event-link">
+            <div style="font-size:9px;color:var(--accent-2);letter-spacing:2px;">ALTERNATIV</div>
+            <div style="color:var(--ink);font-size:11px;margin-top:3px;">ADAC Spritpreise</div>
+          </a>
+        </div>`;
+      setInd('ind-fuel','warn','SETUP');
+      return;
+    }
+    try {
+      const url = `https://creativecommons.tankerkoenig.de/json/list.php?lat=${CONFIG.LAT}&lng=${CONFIG.LON}&rad=4&sort=price&type=e5&apikey=${CONFIG.TANKERKOENIG_KEY}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('http');
+      const d = await r.json();
+      if (!d.ok || !d.stations?.length) throw new Error('empty');
+      // Durchschnitt + 3 günstigste
+      const prices = d.stations.filter(s => s.isOpen && s.price > 0).map(s => s.price);
+      const avg = prices.reduce((a,b)=>a+b,0) / prices.length;
+      const cheapest = d.stations.filter(s => s.isOpen && s.price > 0).slice(0,3);
+      const html = cheapest.map(s => `
+        <div class="transit-line" style="grid-template-columns:1fr auto;">
+          <span style="color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;">
+            <span style="color:var(--ink-dim);">${s.brand||'—'}</span> · ${s.street}
+          </span>
+          <span style="font-family:'Bebas Neue';font-size:18px;color:var(--accent-2);">${s.price.toFixed(3)}€</span>
+        </div>
+      `).join('');
+      document.getElementById('fuel-body').innerHTML = `
+        <div style="text-align:center;margin-bottom:10px;">
+          <div class="big-num" style="font-size:42px;color:var(--accent-2);">${avg.toFixed(3)}€</div>
+          <div style="font-size:9px;letter-spacing:2px;color:var(--ink-dim);">SUPER E5 · Ø IM UMKREIS 4KM</div>
+        </div>
+        <div style="font-size:9px;letter-spacing:1.5px;color:var(--ink-dim);margin-bottom:4px;">GÜNSTIGSTE</div>
+        ${html}
+      `;
+      setInd('ind-fuel','live','LIVE');
+    } catch(e) {
+      document.getElementById('fuel-body').innerHTML = `
+        <div class="err-msg">Spritpreise nicht verfügbar (API-Key prüfen).</div>
+        <a href="https://www.adac.de/services-tests/tanken-kraftstoff-antrieb/aktuelle-kraftstoffpreise/" target="_blank" class="event-link" style="margin-top:10px;">
+          <div style="font-size:9px;color:var(--accent-2);letter-spacing:2px;">ADAC</div>
+          <div style="color:var(--ink);font-size:11px;margin-top:3px;">Spritpreise Vergleich</div>
+        </a>`;
+      setInd('ind-fuel','err','ERROR');
+    }
+  }
+
+  // ============ 09 POLIZEI · korrekte URL ============
+  async function loadPolice() {
+    const tryUrl = async (url) => {
+      try {
+        const u = 'https://api.rss2json.com/v1/api.json?rss_url=' + encodeURIComponent(url);
+        const r = await fetch(u);
+        if (!r.ok) return null;
+        const d = await r.json();
+        if (d.status !== 'ok' || !d.items?.length) return null;
+        return d.items;
+      } catch { return null; }
+    };
+    // Korrekte URL für Berliner Polizei-Presse:
+    let items = await tryUrl('https://www.berlin.de/polizei/polizeimeldungen/index.php/rss');
+    if (!items) items = await tryUrl('https://www.berlin.de/polizei/polizeimeldungen/index/rss');
+    if (!items) {
+      document.getElementById('police-body').innerHTML = `
+        <div style="font-size:11px;color:var(--ink-dim);line-height:1.7;margin-bottom:10px;">
+          Polizei-Feed nicht erreichbar.
+        </div>
+        <a href="https://www.berlin.de/polizei/polizeimeldungen/" target="_blank" class="event-link">
+          <div style="font-size:9px;color:var(--bad);letter-spacing:2px;">POLIZEI</div>
+          <div style="color:var(--ink);font-size:11px;margin-top:3px;">Berliner Polizeimeldungen</div>
+        </a>
+        <a href="https://www.berlin.de/feuerwehr/" target="_blank" class="event-link" style="margin-top:6px;">
+          <div style="font-size:9px;color:var(--bad);letter-spacing:2px;">FEUERWEHR</div>
+          <div style="color:var(--ink);font-size:11px;margin-top:3px;">Berliner Feuerwehr</div>
+        </a>`;
+      setInd('ind-police','warn','LINKS');
+      return;
+    }
+    const fmt = (s) => {
+      const dt = new Date(s); if (isNaN(dt)) return '';
+      const diff = (Date.now()-dt.getTime())/60000;
+      if (diff<60) return `vor ${Math.round(diff)} min`;
+      if (diff<1440) return `vor ${Math.round(diff/60)} h`;
+      return dt.toLocaleDateString('de-DE');
+    };
+    document.getElementById('police-body').innerHTML = items.slice(0,8).map(i => `
+      <div class="news-item" style="grid-template-columns:1fr;">
+        <a href="${i.link}" target="_blank">${i.title}</a>
+        <div class="time">${fmt(i.pubDate)}</div>
+      </div>
+    `).join('');
+    setInd('ind-police','live','LIVE');
+  }
+
+  // ============ INIT ============
+  loadWeather();   setInterval(loadWeather, 10*60*1000);
+  loadDWD();       setInterval(loadDWD, 10*60*1000);
+  loadAir();       setInterval(loadAir, 15*60*1000);
+  loadNews();      setInterval(loadNews, 5*60*1000);
+  loadTransit();   setInterval(loadTransit, 60*1000);
+  loadPollen();    setInterval(loadPollen, 60*60*1000); // 1x/h reicht
+  loadFuel();      setInterval(loadFuel, 15*60*1000);   // Tankerkönig: nicht öfter als alle 5 min
+  loadPolice();    setInterval(loadPolice, 10*60*1000);
+  // Sonne-Panel: rerendert sich beim Wetter-Refresh + alle 5 min
+  setInterval(() => renderSun(), 5*60*1000);
+</script>
+</body>
+</html>
